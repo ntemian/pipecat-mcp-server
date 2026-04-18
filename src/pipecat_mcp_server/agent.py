@@ -12,12 +12,16 @@ services, allowing an MCP client to listen for user speech and speak responses.
 """
 
 import asyncio
+import os
 import sys
 from typing import Any, Optional
 
 from dotenv import load_dotenv
 from loguru import logger
-from pipecat.audio.filters.rnnoise_filter import RNNoiseFilter
+try:
+    from pipecat.audio.filters.rnnoise_filter import RNNoiseFilter  # type: ignore
+except Exception:  # pyrnnoise wheel unavailable on macOS 14 arm64
+    RNNoiseFilter = None  # type: ignore
 from pipecat.audio.turn.smart_turn.local_smart_turn_v3 import LocalSmartTurnAnalyzerV3
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.audio.vad.vad_analyzer import VADParams
@@ -300,7 +304,17 @@ class PipecatMCPAgent:
             return WhisperSTTService(model="Systran/faster-distil-whisper-large-v3")
 
     def _create_tts_service(self) -> TTSService:
-        return KokoroTTSService(voice_id="af_heart")
+        provider = os.getenv("TTS_PROVIDER", "kokoro").lower()
+        if provider == "elevenlabs":
+            from pipecat.services.elevenlabs.tts import ElevenLabsTTSService
+
+            api_key = os.environ["ELEVENLABS_API_KEY"]
+            return ElevenLabsTTSService(
+                api_key=api_key,
+                voice_id=os.getenv("ELEVENLABS_VOICE_ID", "21m00Tcm4TlvDq8ikWAM"),
+                model=os.getenv("ELEVENLABS_MODEL", "eleven_turbo_v2_5"),
+            )
+        return KokoroTTSService(voice_id=os.getenv("KOKORO_VOICE_ID", "af_heart"))
 
 
 async def create_agent(runner_args: RunnerArguments) -> PipecatMCPAgent:
@@ -323,20 +337,20 @@ async def create_agent(runner_args: RunnerArguments) -> PipecatMCPAgent:
             audio_in_enabled=True,
             audio_out_enabled=True,
             video_out_enabled=True,
-            audio_in_filter=RNNoiseFilter(),
+            audio_in_filter=RNNoiseFilter() if RNNoiseFilter else None,
         )
     elif isinstance(runner_args, SmallWebRTCRunnerArguments):
         transport_params["webrtc"] = lambda: TransportParams(
             audio_in_enabled=True,
             audio_out_enabled=True,
             video_out_enabled=True,
-            audio_in_filter=RNNoiseFilter(),
+            audio_in_filter=RNNoiseFilter() if RNNoiseFilter else None,
         )
     elif isinstance(runner_args, WebSocketRunnerArguments):
         params_callback = lambda: FastAPIWebsocketParams(
             audio_in_enabled=True,
             audio_out_enabled=True,
-            audio_in_filter=RNNoiseFilter(),
+            audio_in_filter=RNNoiseFilter() if RNNoiseFilter else None,
         )
         transport_params["twilio"] = params_callback
         transport_params["telnyx"] = params_callback
