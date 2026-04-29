@@ -2,80 +2,150 @@
 
 PICASSO STEAL from Google for Developers (2026-04-27). Adds PSTN telephony so anyone can call Pythia. One-pager: `~/LOSC/data/picasso/one-pagers/2026-04-28-googledevs-gemini-live-telephony.md`.
 
-## Architecture
+> **Status 2026-04-29**: scope corrected. This is **NOT** a 30-minute config job. The original runbook treated `pipecat-mcp-server -t twilio` as a built-in mode — it isn't. Adding inbound phone requires authoring a separate bot module (`phone_bot.py`) against the upstream `pipecat.runner.run`. Realistic effort: 2-4 hours of authoring, not config.
+
+---
+
+## Architecture (target)
 
 ```
 Caller's phone → PSTN → Twilio number → Twilio Media Streams (WSS)
-    → https://ntemiss-mbp.tailddb317.ts.net:10000  (existing Tailscale funnel)
-    → Mac:7860  (pipecat-mcp-server -t twilio)
-    → Whisper-MLX → Claude Sonnet 4.5 → 11Labs (or Kokoro for cost)
+    → https://ntemiss-macbook-pro-1.tailddb317.ts.net:10000  (NEW Tailscale funnel)
+    → Mac:7861  (python -m pipecat.runner.run -t twilio  driving phone_bot.py)
+    → Whisper-MLX → Claude Sonnet 4.5 → 11Labs/Kokoro
     → LOSC MCP (full ontology-aware tool surface)
 ```
 
-No ngrok. No GCP. Everything stays on the Mac.
+**Coexists with**:
+- Browser Pythia: `voice-loop` on `:7860`, funnel `:8443` (UNTOUCHED).
 
-## Setup — the auth-wall click-path (Ntemis only)
+**Why two instances, not one**: voice-loop is browser-WebRTC only. Twilio Media Streams use WebSocket; the runner-based phone bot speaks that protocol natively. Different transports = different processes.
 
-### 1. Twilio account
-- https://www.twilio.com/try-twilio → sign up
-- Free trial: $15.50 credit (covers ~20 hours of inbound calling for testing)
-- Verify your mobile during signup (so trial calls work)
+---
 
-### 2. Buy a number
+## Repo binaries (canonical, verified 2026-04-29)
 
-For **L+A client intake** (production): buy a Greek number.
-- Console → Phone Numbers → Buy a number → Country: Greece
-- Greek mobile (+30 69x): ~€1.00/mo + €0.013/min inbound
-- Greek geographic (+30 21x): ~€1.00/mo + €0.013/min inbound — **better for legal-firm credibility**
+| Binary | Module | Port | Transport | Status |
+|---|---|---|---|---|
+| `voice-loop` | `pipecat_mcp_server.voice_loop:main` | 7860 | WebRTC (browser) | 🟢 live (PID 2072 today) |
+| `pipecat-mcp-server` | `pipecat_mcp_server.server:main` | 9090 | MCP tool-server | 🟢 (separate concern, not telephony) |
+| `python -m pipecat.runner.run -t twilio --port 7861 phone_bot:bot` | `pipecat.runner.run:main` | 7861 | Twilio Media Streams (WSS) | ❌ phone_bot.py not yet authored |
 
-For **first test only**: a free US trial number works fine.
+`pipecat-mcp-server` is **NOT** polymorphic via `-t twilio`. It is the MCP tool-server entry point. Different package responsibility. See `~/.claude/projects/-Users-ntemis/memory/feedback_picasso_pipecat_distinction.md` for the canonical clarification.
 
-### 3. Grab credentials
-- Console home → Account Info panel → copy:
-  - `Account SID` (starts `AC...`)
-  - `Auth Token` (click the eye to reveal)
+---
 
-### 4. Hand them back to me
-
-Paste the SID + Auth Token here in chat (or save to `~/Projects/pipecat-mcp-server/.env` yourself with these two lines):
+## Tailscale Funnel state (verified 2026-04-29)
 
 ```
-TWILIO_ACCOUNT_SID=AC...
-TWILIO_AUTH_TOKEN=...
+# Funnel on:
+#     - https://ntemiss-macbook-pro-1.tailddb317.ts.net:8443   (→ 127.0.0.1:7860, browser Pythia)
 ```
 
-## What I do after you've given me the credentials
+Tailscale Funnel allows **only ports 443, 8443, 10000** for HTTPS. `:8443` taken by browser Pythia. Phone instance must claim **`:443` or `:10000`** externally — `:10000` recommended (`:443` collides with web HTTP convention).
 
-1. Append `TWILIO_*` to `.env`.
-2. Verify Tailscale funnel carries WebSockets to `:10000` (Twilio Media Streams use `wss://`).
-3. Start a *second* pipecat instance on a new port (e.g. 7861) for phone-only mode, leaving the browser/driving instance on 7860 untouched:
-   ```bash
-   cd ~/Projects/pipecat-mcp-server
-   nohup .venv/bin/pipecat-mcp-server \
-     -t twilio \
-     -x ntemiss-mbp.tailddb317.ts.net:10000 \
-     --port 7861 > /tmp/pythia-phone.log 2>&1 &
-   ```
-   (Adjust if upstream uses a different flag; will verify on first run.)
-4. Add a second Tailscale funnel on a different external port pointing at 7861.
-5. Twilio Console → your number → Voice config → "A CALL COMES IN" → Webhook → `https://ntemiss-mbp.tailddb317.ts.net:<funnel-port>/twilio/voice` (exact path TBD from pipecat docs).
-6. Test call from your own mobile.
-7. If the Greek line works: extend `/talk` slash command with a `/talk phone` mode that starts/stops the inbound instance.
+The earlier-doc hostname `ntemiss-mbp.tailddb317.ts.net` is **stale** — actual is `ntemiss-macbook-pro-1.tailddb317.ts.net`.
 
-## Cost expectations
+---
 
-- **Personal use** (Ntemis dialing in himself when phone-browser fails): negligible, <€5/mo.
-- **L+A intake pilot** (real clients calling): €1/mo number + €0.013/min ≈ €15-30/mo for moderate inbound volume.
-- **LLM cost** unchanged (still Sonnet 4.5 + LOSC MCP) — same as `/talk` driving sessions.
+## What's already in place
+
+✅ `~/Projects/pipecat-mcp-server/.env` provisioned with:
+- `TWILIO_ACCOUNT_SID` (34 chars, AC… prefix)
+- `TWILIO_AUTH_TOKEN` (32 chars)
+- `ANTHROPIC_API_KEY`, `CLAUDE_MODEL`, `ELEVENLABS_*`, `KOKORO_VOICE_ID`
+
+✅ `pipecat-ai` library installed in venv (incl. `pipecat/serializers/twilio.py` + `pipecat/runner/run.py`)
+
+✅ Browser-mode `voice_loop.py` exists and is running — ~80% liftable as the basis for `phone_bot.py`
+
+❌ `phone_bot.py` not yet authored
+❌ New Tailscale Funnel `:10000` → `:7861` not added
+❌ Twilio Console webhook not wired
+❌ Greek-mobile dial test not performed
+
+---
+
+## What needs to happen (corrected scope)
+
+### Phase 1 — author `phone_bot.py` (~2hr)
+
+Create `~/Projects/pipecat-mcp-server/src/pipecat_mcp_server/phone_bot.py` with:
+
+```python
+async def bot(runner_args):
+    # runner_args is a WebSocketRunnerArguments when -t twilio
+    transport = setup_telephony_transport(runner_args)
+    # Wire: Twilio WSS in → Whisper-MLX STT → Claude Sonnet 4.5 (LOSC MCP)
+    # → 11Labs/Kokoro TTS → Twilio WSS out
+    pipeline = build_pythia_pipeline(transport)  # crib from voice_loop.build_pipeline()
+    await run_pipeline(pipeline)
+```
+
+Lift the system prompt + LOSC MCP tool registration from `voice_loop.py`. Add a phone-specific persona note ("Caller may be a stranger; verify identity before any outbound action").
+
+Add to `pyproject.toml [project.scripts]`:
+```toml
+phone-bot = "pipecat_mcp_server.phone_bot:run_via_runner"
+```
+
+Where `run_via_runner` is a small wrapper that calls `pipecat.runner.run.main` with `phone_bot:bot` discovered.
+
+### Phase 2 — start daemon + funnel (~5 min once Phase 1 ships)
+
+```bash
+cd ~/Projects/pipecat-mcp-server
+nohup .venv/bin/phone-bot -t twilio --port 7861 > /tmp/pythia-phone.log 2>&1 &
+
+tailscale funnel --bg --https=10000 7861
+tailscale funnel status   # verify 10000 → 7861 mapping
+```
+
+### Phase 3 — Twilio Console webhook (~5 min, Ntemis only — auth wall)
+
+Console → Phone Numbers → your number → Voice config → "A CALL COMES IN":
+- Webhook: `https://ntemiss-macbook-pro-1.tailddb317.ts.net:10000/twilio/voice` (exact path TBD from `pipecat.runner.run` startup logs)
+- HTTP method: POST
+
+### Phase 4 — Greek-mobile dial test (~10 min)
+
+- Dial number from your own Greek mobile
+- Verify Pythia answers in Greek (Whisper-MLX language detection)
+- Test 3 LOSC tool calls: `losc_thought`, `losc_search`, `losc_calendar_add`
+- Verify call hangs up cleanly + audit log records the session
+
+### Phase 5 — extend `/talk` skill
+
+Add `/talk phone` mode that does Phase 2 (daemon + funnel) + a status sub-command. Skip Phase 3-4 in skill (those are auth-wall + manual).
+
+---
+
+## Cost expectations (unchanged)
+
+- **Personal use**: <€5/mo
+- **L+A intake pilot**: €1/mo number + €0.013/min ≈ €15-30/mo for moderate inbound volume
+- **LLM cost**: same as `/talk` driving sessions
+
+---
 
 ## Risk/blast-radius notes
 
-- Twilio is a separate vendor account. No coupling to LOSC ontology. Easy to abandon if not useful.
-- If you give a Greek number to L+A clients before the system is reliable, you create a new SLA. **Test exhaustively with your own mobile first.** Don't share the number with Apollo's intake list until 5+ successful test calls including multilingual handoff.
-- Pipecat's `-t twilio` mode may not be perfectly stable across upgrades — log this dependency and watch upstream releases.
+- Twilio is a separate vendor. Easy to abandon.
+- **Don't share the number with Apollo's intake list until 5+ successful test calls**, including multilingual handoff. New SLA created on first share.
+- `pipecat.runner.run` upstream may change between releases — log this dependency, watch upstream releases.
+- `phone_bot.py` is new code → needs `tests/test_phone_bot.py` per LOSC's test automation rules in `~/CLAUDE.md`.
+
+---
 
 ## What I will NOT do without explicit go
 
 - Won't `/ping-apollo` about the L+A intake variant until the personal-use number works first (Auth Bootstrap rule + don't surprise Apollo with infrastructure he hasn't agreed to).
 - Won't swap Pythia's brain to Gemini 3.1 Flash Live. Sonnet + prompt cache + LOSC MCP is the differentiator.
 - Won't migrate hosting to GCP.
+
+---
+
+## Lifecycle in the PICASSO queue
+
+- 2026-04-28: scored STEAL (one-pager written)
+- 2026-04-29: scope corrected — authoring task, not config. Status remains STEAL with `progress_note` reflecting Phase 1-5 above. `foundation_complete: true` for the Twilio creds + library install; `last_mile_pending` updated to "author `phone_bot.py` then complete Phases 2-4".
