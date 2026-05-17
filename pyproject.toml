@@ -58,6 +58,7 @@ dev = [
 [project.scripts]
 pipecat-mcp-server = "pipecat_mcp_server.server:main"
 voice-loop = "pipecat_mcp_server.voice_loop:main"
+phone-bot = "pipecat_mcp_server.phone_bot:run_via_runner"
 
 [tool.setuptools.packages.find]
 where = ["src"]
