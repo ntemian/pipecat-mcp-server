@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.ntemis.pythia-phone</string>
+
+  <!-- Pythia over Twilio PSTN (PICASSO STEAL gemini-live-telephony). Continuous daemon. -->
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/ntemis/Projects/pipecat-mcp-server/.venv/bin/phone-bot</string>
+    <string>-t</string>
+    <string>twilio</string>
+    <string>--port</string>
+    <string>7861</string>
+    <string>-x</string>
+    <string>ntemiss-mbp.tailddb317.ts.net:8443</string>
+  </array>
+
+  <!-- cwd = repo so load_dotenv() finds .env (Twilio/Anthropic/11Labs/PYTHIA_ALLOWED_CALLERS). -->
+  <key>WorkingDirectory</key>
+  <string>/Users/ntemis/Projects/pipecat-mcp-server</string>
+
+  <!-- Wide PATH: the bot spawns `node` for the LOSC MCP stdio server. /Users/ntemis/bin holds
+       node; without this the MCP subprocess fails silently under launchd's sparse PATH. -->
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/Users/ntemis/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
+
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>15</integer>
+
+  <key>StandardOutPath</key>
+  <string>/Users/ntemis/Library/Logs/pythia-phone.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/ntemis/Library/Logs/pythia-phone.log</string>
+</dict>
+</plist>

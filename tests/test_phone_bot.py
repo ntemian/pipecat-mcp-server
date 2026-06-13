@@ -60,3 +60,76 @@ async def test_bot_rejects_non_websocket_runner():
 
     with pytest.raises(TypeError):
         await pb.bot(NotWebSocketArgs())
+
+
+# ── Hard caller gate ─────────────────────────────────────────────────────────
+
+def test_allowlist_parses_env(monkeypatch):
+    import pipecat_mcp_server.phone_bot as pb
+
+    monkeypatch.setenv("PYTHIA_ALLOWED_CALLERS", " +306971234567 , +302101112222 ")
+    assert pb._allowed_callers() == {"+306971234567", "+302101112222"}
+
+
+def test_allowlist_empty_is_fail_closed(monkeypatch):
+    import pipecat_mcp_server.phone_bot as pb
+
+    monkeypatch.setenv("PYTHIA_ALLOWED_CALLERS", "")
+    assert pb._allowed_callers() == set()
+
+
+@pytest.mark.asyncio
+async def test_gate_denies_when_allowlist_empty(monkeypatch):
+    """No allowlist configured → deny everyone, and never hit the network."""
+    import pipecat_mcp_server.phone_bot as pb
+
+    monkeypatch.setenv("PYTHIA_ALLOWED_CALLERS", "")
+    called = {"n": 0}
+    monkeypatch.setattr(pb, "_fetch_twilio_caller", lambda sid: called.__setitem__("n", called["n"] + 1) or "+1555")
+    allowed, caller = await pb._caller_is_allowed("CA_test")
+    assert allowed is False
+    assert called["n"] == 0  # short-circuits before any REST lookup
+
+
+@pytest.mark.asyncio
+async def test_gate_denies_missing_call_sid(monkeypatch):
+    import pipecat_mcp_server.phone_bot as pb
+
+    monkeypatch.setenv("PYTHIA_ALLOWED_CALLERS", "+306971234567")
+    allowed, _ = await pb._caller_is_allowed(None)
+    assert allowed is False
+
+
+@pytest.mark.asyncio
+async def test_gate_allows_listed_caller(monkeypatch):
+    import pipecat_mcp_server.phone_bot as pb
+
+    monkeypatch.setenv("PYTHIA_ALLOWED_CALLERS", "+306971234567")
+    monkeypatch.setattr(pb, "_fetch_twilio_caller", lambda sid: "+306971234567")
+    allowed, caller = await pb._caller_is_allowed("CA_test")
+    assert allowed is True and caller == "+306971234567"
+
+
+@pytest.mark.asyncio
+async def test_gate_denies_unlisted_caller(monkeypatch):
+    import pipecat_mcp_server.phone_bot as pb
+
+    monkeypatch.setenv("PYTHIA_ALLOWED_CALLERS", "+306971234567")
+    monkeypatch.setattr(pb, "_fetch_twilio_caller", lambda sid: "+15558675309")
+    allowed, caller = await pb._caller_is_allowed("CA_test")
+    assert allowed is False
+
+
+@pytest.mark.asyncio
+async def test_gate_denies_on_lookup_failure(monkeypatch):
+    """Twilio REST error → fail closed (deny), never raise into the caller path."""
+    import pipecat_mcp_server.phone_bot as pb
+
+    monkeypatch.setenv("PYTHIA_ALLOWED_CALLERS", "+306971234567")
+
+    def boom(sid):
+        raise RuntimeError("twilio down")
+
+    monkeypatch.setattr(pb, "_fetch_twilio_caller", boom)
+    allowed, _ = await pb._caller_is_allowed("CA_test")
+    assert allowed is False

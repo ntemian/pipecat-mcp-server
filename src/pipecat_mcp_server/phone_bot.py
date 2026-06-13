@@ -13,9 +13,13 @@ Or directly via pipecat.runner.run:
 See ~/Projects/pipecat-mcp-server/TWILIO_SETUP.md for the full Phase 1-5 runbook.
 """
 
+import asyncio
+import base64
+import json
 import os
 import sys
-from typing import Any
+import urllib.request
+from typing import Any, Optional
 
 from dotenv import load_dotenv
 from loguru import logger
@@ -70,6 +74,44 @@ Context: Athens timezone. Ntemis Latsoudis, lawyer at L+A.
 """
 
 
+def _allowed_callers() -> set[str]:
+    """Approved caller E.164 numbers from env, read per-call so .env edits take effect on restart.
+
+    Empty set = fail closed (reject every caller). This is the HARD gate: it runs in code
+    before any LOSC MCP tool is registered, so an unapproved caller can never reach the graph.
+    The system-prompt identity check is only a secondary, soft layer.
+    """
+    raw = os.getenv("PYTHIA_ALLOWED_CALLERS", "")
+    return {n.strip() for n in raw.split(",") if n.strip()}
+
+
+def _fetch_twilio_caller(call_sid: str) -> Optional[str]:
+    """Look up the caller's E.164 `From` for a Twilio call via REST (blocking — run in a thread).
+
+    Twilio Media Streams' start event carries no caller number, so we resolve it from the
+    CallSid. Network failure → None → treated as not-allowed (fail closed)."""
+    sid = os.environ["TWILIO_ACCOUNT_SID"]
+    tok = os.environ["TWILIO_AUTH_TOKEN"]
+    auth = base64.b64encode(f"{sid}:{tok}".encode()).decode()
+    url = f"https://api.twilio.com/2010-04-01/Accounts/{sid}/Calls/{call_sid}.json"
+    req = urllib.request.Request(url, headers={"Authorization": f"Basic {auth}"})
+    with urllib.request.urlopen(req, timeout=8) as resp:  # noqa: S310 (fixed Twilio host)
+        return json.load(resp).get("from")
+
+
+async def _caller_is_allowed(call_sid: Optional[str]) -> tuple[bool, Optional[str]]:
+    """Return (allowed, caller_number). Fail closed on any uncertainty."""
+    allowed = _allowed_callers()
+    if not call_sid or not allowed:
+        return False, None
+    try:
+        caller = await asyncio.to_thread(_fetch_twilio_caller, call_sid)
+    except Exception as e:  # network/auth error → deny
+        logger.warning(f"caller lookup failed for call_sid={call_sid}: {e!r} — denying")
+        return False, None
+    return (caller in allowed), caller
+
+
 async def bot(runner_args: RunnerArguments):
     """Pipecat runner entry point — invoked by `pipecat.runner.run -t twilio`."""
     if not isinstance(runner_args, WebSocketRunnerArguments):
@@ -86,6 +128,22 @@ async def bot(runner_args: RunnerArguments):
 
     stream_sid = call_data["stream_id"]
     call_sid = call_data.get("call_id")
+
+    # HARD GATE: resolve the caller and reject anyone not on the allowlist BEFORE we
+    # build the pipeline or register a single LOSC tool. Unapproved callers get the
+    # websocket closed and never reach the graph.
+    allowed, caller = await _caller_is_allowed(call_sid)
+    if not allowed:
+        logger.warning(
+            f"BLOCKED unapproved caller={caller!r} call_sid={call_sid} — "
+            f"closing without registering LOSC tools"
+        )
+        try:
+            await websocket.close(code=1008)  # 1008 = policy violation
+        except Exception:
+            pass
+        return
+    logger.info(f"caller {caller} approved — proceeding with full Pythia pipeline")
 
     serializer = TwilioFrameSerializer(
         stream_sid=stream_sid,
