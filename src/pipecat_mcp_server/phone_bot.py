@@ -25,6 +25,7 @@ from pipecat.audio.vad.vad_analyzer import VADParams
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineParams, PipelineTask
+from pipecat.processors.aggregators.openai_llm_context import OpenAILLMContext
 from pipecat.runner.types import RunnerArguments, WebSocketRunnerArguments
 from pipecat.runner.utils import parse_telephony_websocket
 from pipecat.serializers.twilio import TwilioFrameSerializer
@@ -126,7 +127,7 @@ async def bot(runner_args: RunnerArguments):
     tools_schema = await losc_mcp.register_tools(llm)
     logger.info("LOSC MCP tools registered (phone bot)")
 
-    context = llm.create_context(
+    context = OpenAILLMContext(
         messages=[{"role": "system", "content": SYSTEM_PROMPT}],
         tools=tools_schema,
     )

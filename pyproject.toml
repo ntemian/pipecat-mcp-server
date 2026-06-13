@@ -83,3 +83,6 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 # Skip D104 (missing docstring in public package) for __init__.py files
 "**/__init__.py" = ["D104"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
